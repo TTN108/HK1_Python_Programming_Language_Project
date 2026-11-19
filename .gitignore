@@ -1,0 +1,28 @@
+# Môi trường ảo Python
+.venv/
+venv/
+env/
+
+# Dữ liệu ảnh lớn (tải lại từ Roboflow / Google Drive, không push lên Git)
+data/
+data_test/
+raw_data_1/
+raw_data_2/
+*.zip
+
+# Cache & file tạm Python / Jupyter
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# File ghi chú cá nhân / thử nghiệm cục bộ (bỏ comment nếu muốn đẩy lên Git)
+CONVERSATION_HISTORY.md
+ghi chu hoc tap.md
+test.py
+test_jupyter.ipynb
+
+# Hệ điều hành & IDE
+.DS_Store
+Thumbs.db
+.vscode/
