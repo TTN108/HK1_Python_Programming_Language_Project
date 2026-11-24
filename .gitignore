@@ -1,0 +1,29 @@
+# Môi trường ảo Python
+.venv/
+venv/
+env/
+
+# Dữ liệu ảnh lớn (tải lại từ Roboflow / Google Drive, không push lên Git)
+data/
+data_test/
+raw_data_1/
+raw_data_2/
+raw_datasets/
+data_v1/
+checkpoints/
+logs/
+*.zip
+
+# Cache & file tạm Python / Jupyter
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Kết quả chạy ứng dụng (ảnh chụp, file xuất)
+outputs/*
+!outputs/.gitkeep
+
+# Hệ điều hành & IDE
+.DS_Store
+Thumbs.db
+.vscode/

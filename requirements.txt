@@ -1,0 +1,7 @@
+# Thư viện để CHẠY ứng dụng (Python 3.10+; khuyến nghị 3.12)
+opencv-python>=4.8
+numpy>=1.26
+pillow>=10.0
+onnxruntime>=1.17        # có GPU NVIDIA: dùng onnxruntime-gpu
+customtkinter>=5.2
+pyttsx3>=2.90            # đọc to tổng tiền (tuỳ chọn, thiếu thì app vẫn chạy)

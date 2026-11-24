@@ -1,0 +1,17 @@
+opencv-python==5.0.0.93
+numpy==2.5.4
+pillow==13.0.0
+matplotlib==3.11.2
+ultralytics==8.4.198
+torch==2.15.0
+torchvision==0.29.2
+pyttsx3==2.99
+ipykernel==7.4.0
+# --- gói training/ (TV2) ---
+albumentations>=2.0.0     # >=2.0: training/dataset.py dùng CoarseDropout(num_holes_range, fill)
+scikit-learn>=1.4.0
+onnx>=1.15.0
+onnxruntime>=1.17.0
+tqdm>=4.66.0
+roboflow>=1.1.0
+pyyaml>=6.0.0
