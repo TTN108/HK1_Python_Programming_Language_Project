@@ -1,6 +1,6 @@
-# 💵 Nhận diện & Phân loại Mệnh giá Tiền Việt Nam (VN Banknote Classifier)
+# 💵 Nhận diện Tiền VNĐ cho Trạm Quyên Góp Minh Bạch (MobileNetV3-Small – ONNX)
 
-Module huấn luyện, đánh giá và đóng gói mô hình học sâu **MobileNetV3-Small** phân loại **9 mệnh giá tiền Việt Nam** (`1.000đ` – `500.000đ`) và lớp **`khong_phai_tien`**, phục vụ đồ án Thị giác Máy tính nhận diện mệnh giá tiền theo thời gian thực (hỗ trợ phát giọng nói tiếng Việt offline).
+Module huấn luyện, đánh giá và đóng gói mô hình học sâu **MobileNetV3-Small** phân loại **9 mệnh giá tiền Việt Nam** (`1.000đ` – `500.000đ`) và lớp **`khong_phai_tien`**, phục vụ đồ án Thị giác Máy tính theo **Hướng 3: Trạm quyên góp thiện nguyện minh bạch thời gian thực** (chạy mượt trên CPU qua ONNX, tích hợp cùng bộ tách tờ & vạch khe thả tiền OpenCV và giao diện PySide6).
 
 ---
 
@@ -8,11 +8,11 @@ Module huấn luyện, đánh giá và đóng gói mô hình học sâu **Mobile
 
 | File | Kích thước | Mô tả & Mục đích sử dụng |
 | :--- | :---: | :--- |
-| [`models/currency_classifier_v1.onnx`](models/currency_classifier_v1.onnx) | ~6.13 MB | **Mô hình triển khai chính (khuyến nghị)** — xuất ONNX opset 13, hỗ trợ dynamic batch, chạy nhanh trên CPU qua `onnxruntime` (không cần cài PyTorch). |
+| [`models/currency_classifier_v1.onnx`](models/currency_classifier_v1.onnx) | ~6.13 MB | **Mô hình triển khai chính (khuyến nghị)** — xuất ONNX opset 13, hỗ trợ dynamic batch, chạy nhanh trên CPU qua `onnxruntime` hoặc `cv2.dnn` (không cần cài PyTorch). |
 | [`models/best_mobilenetv3.pth`](models/best_mobilenetv3.pth) | ~6.25 MB | Trọng số PyTorch tốt nhất (đạt đỉnh tại GĐ2 – Epoch 14/15). |
 | [`models/confusion_matrix.png`](models/confusion_matrix.png) | ~252 KB | Biểu đồ ma trận nhầm lẫn trên tập Validation (1.523 ảnh, 300 DPI) dùng cho báo cáo & slide. |
-| [`train_mobilenetv3.ipynb`](train_mobilenetv3.ipynb) | — | Notebook huấn luyện trên Google Colab (đã ẩn API key Roboflow). |
-| [`test_models.ipynb`](test_models.ipynb) | — | Notebook kiểm thử cục bộ (đánh giá toàn tập Test, soi ảnh lỗi, Stress Test độ ổn định). |
+| [`train_mobilenetv3.ipynb`](train_mobilenetv3.ipynb) | — | Notebook huấn luyện trên Google Colab (đã ẩn API key Roboflow và đồng bộ Cell 7 với `CurrencyClassifier` Hướng 3). |
+| [`test_models.ipynb`](test_models.ipynb) | — | Notebook kiểm thử cục bộ (đánh giá PyTorch trên tập Test, soi ảnh lỗi, Stress Test và kiểm thử triển khai `.onnx` Hướng 3). |
 | [`requirements.txt`](requirements.txt) | — | Danh sách thư viện môi trường Python 3.12 cục bộ. |
 
 > **Lưu ý:** Các thư mục ảnh dữ liệu lớn (`data/`, `data_test/`, `raw_data_*`) và môi trường ảo (`.venv/`) đã được loại trừ trong [`.gitignore`](.gitignore) để giữ repository gọn nhẹ.
@@ -74,7 +74,7 @@ Huấn luyện trên **Google Colab (GPU)** với chiến lược **Transfer Lea
 ![Ma trận nhầm lẫn tập Validation](models/confusion_matrix.png)
 
 ### 2. Tập Test độc lập (813 ảnh — chạy cục bộ qua `test_models.ipynb`)
-* **Accuracy tổng:** **98.03%** (797 / 813) — độ lệch Val vs Test chỉ **0.85%** (không bị overfitting).
+* **Accuracy tổng (PyTorch):** **98.03%** (797 / 813) — độ lệch Val vs Test chỉ **0.85%** (không bị overfitting).
 * **Độ tin cậy trung bình:** Khi đoán đúng **90.55%** | Khi đoán sai **50.39%**.
 * **Kiểm tra ảnh hoàn toàn chưa từng thấy (loại trừ các ảnh chung gốc Roboflow):** **97.99%** (584 / 596 ảnh tiền).
 
@@ -101,9 +101,15 @@ Huấn luyện trên **Google Colab (GPU)** với chiến lược **Transfer Lea
 | Làm mờ Gaussian (`r=2`) / Cắt mất 25% viền | **95.00% – 95.50%** | 81.55% – 85.54% |
 | Chói sáng (`1.5×`) | **85.00%** | 73.69% |
 
+### 4. Kiểm thử triển khai ONNX theo Hướng 3 (ngưỡng `0.75` — Cell 5 trong `test_models.ipynb`)
+* **Độ chính xác thô `.onnx` (argmax trên 813 ảnh Test):** **98.15%** (`798 / 813`).
+* **Trên 742 ảnh tiền thật tại ngưỡng `0.75`:** Chốt đúng **706 ảnh (95.15%)**, chỉ **1 ảnh (0.13%)** nhầm sang mệnh giá khác, **34 ảnh** được đẩy sang `khong_chac_chan` (nhắc vuốt phẳng) và **1 ảnh** bị xếp vào `khong_phai_tien`.
+* **Trên 71 ảnh không phải tiền tại ngưỡng `0.75`:** Chặn tổng cộng **70 / 71 ảnh (98.59%)** (`68` ảnh chặn đúng nhãn `khong_phai_tien` + `2` ảnh chặn dưới ngưỡng `khong_chac_chan`), chỉ `1` ảnh lọt.
+* **Kiểm chứng gộp đa khung hình (`predict_multi_frame`):** Ảnh `50.000đ` bị làm mờ Gaussian nặng `(31×31)` khi đoán đơn lẻ rớt về `khong_chac_chan (66.31%)`, nhưng khi gộp với 3 khung sắc nét (`[3 nét + 1 mờ]`) vẫn chốt đúng **`50000` (84.50%)**.
+
 ---
 
-## 🔌 Hướng dẫn Tích hợp cho Nhóm (Hợp đồng Module)
+## 🔌 Hướng dẫn Tích hợp cho Nhóm (Hợp đồng Module — Hướng 3)
 
 ### 1. Thứ tự 10 nhãn BẮT BUỘC (theo đúng thứ tự `ImageFolder` lúc train)
 ```python
@@ -114,50 +120,90 @@ CLASS_NAMES = [
 ```
 > ⚠️ **Tuyệt đối không tự sắp xếp lại theo thứ tự tăng dần số tiền** (`1000`, `2000`, `5000`...) vì sẽ làm lệch hoàn toàn chỉ số dự đoán của mô hình!
 
-### 2. Code mẫu tích hợp bằng ONNX Runtime (`src/model/classifier.py`)
+### 2. Phân tách 3 trạng thái đầu ra cho Trạm quyên góp minh bạch
 * **Đầu vào:** Ảnh **BGR kích thước `224 × 224`** (`numpy.ndarray` từ OpenCV, đã cắt sạch tờ tiền — **không vẽ khung viền đè lên ảnh trước khi dự đoán**).
-* **Đầu ra:** Tuple `(label, confidence)` — trả về `"không chắc chắn"` nếu dưới ngưỡng tin cậy hoặc rơi vào lớp `khong_phai_tien`.
+* **Đầu ra `(label, confidence)`:**
+
+| Giá trị `label` | Ý nghĩa trong Hướng 3 | Hành động gợi ý trên Giao diện (TV1) |
+| :--- | :--- | :--- |
+| `'1000'` … `'500000'` | Tiền hợp lệ đạt ngưỡng tin cậy (`>= 0.75`) | Khóa mệnh giá, đợi tâm tờ tiền đi qua vạch khe thả tiền (`Virtual Tripwire`) rồi cộng quỹ & phát lời cảm ơn. |
+| `'khong_phai_tien'` | Vật lạ, bàn tay, giấy trắng, hóa đơn, thẻ sinh viên | Từ chối ngay, không cộng tiền dù đi qua khe hộp; nhắc lấy vật lạ ra khỏi khay. |
+| `'khong_chac_chan'` | Là tiền nhưng bị gấp mép, mờ hoặc lóa dưới ngưỡng | Nhắc người quyên góp vuốt phẳng đặt lại (**không** cho người dùng công cộng tự bấm sửa mệnh giá ngoài màn hình chính). |
+
+### 3. Code mẫu tích hợp ONNX (hỗ trợ `onnxruntime` CPU & tự fallback `cv2.dnn`)
+> Nhóm có thể copy trực tiếp lớp `CurrencyClassifier` dưới đây (đồng bộ với Cell 7 của [`train_mobilenetv3.ipynb`](train_mobilenetv3.ipynb) và Cell 5 của [`test_models.ipynb`](test_models.ipynb)):
 
 ```python
 import cv2
 import numpy as np
-import onnxruntime as ort
 
 CLASS_NAMES = [
     '1000', '10000', '100000', '2000', '20000',
     '200000', '5000', '50000', '500000', 'khong_phai_tien'
 ]
 
+
 class CurrencyClassifier:
     def __init__(self, model_path="models/currency_classifier_v1.onnx", conf_threshold=0.75):
-        self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-        self.class_names = CLASS_NAMES
-        self.conf_threshold = conf_threshold
+        self.class_names = list(CLASS_NAMES)
+        self.conf_threshold = float(conf_threshold)
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-        self.std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.session = None
+        self.net = None
 
-    def predict(self, img_bgr):
+        try:
+            import onnxruntime as ort
+            self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+            self.input_name = self.session.get_inputs()[0].name
+        except ImportError:
+            self.net = cv2.dnn.readNetFromONNX(model_path)
+
+    def _infer_probs(self, img_bgr):
         img_224 = cv2.resize(img_bgr, (224, 224))
         img_rgb = cv2.cvtColor(img_224, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         img_norm = (img_rgb - self.mean) / self.std
-        tensor_in = np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...]
+        tensor_in = np.ascontiguousarray(np.transpose(img_norm, (2, 0, 1))[np.newaxis, ...], dtype=np.float32)
 
-        logits = self.session.run(["output"], {"input": tensor_in})[0][0]
+        if self.session is not None:
+            logits = self.session.run(None, {self.input_name: tensor_in})[0][0]
+        else:
+            self.net.setInput(tensor_in)
+            logits = self.net.forward()[0]
+
+        logits = np.asarray(logits, dtype=np.float32).reshape(-1)
         exp_logits = np.exp(logits - np.max(logits))
-        probs = exp_logits / np.sum(exp_logits)
+        return exp_logits / np.sum(exp_logits)
 
+    def _decide(self, probs):
         best_idx = int(np.argmax(probs))
         confidence = float(probs[best_idx])
         label = self.class_names[best_idx]
 
-        if confidence < self.conf_threshold or label == "khong_phai_tien":
-            return "không chắc chắn", confidence
+        if label == "khong_phai_tien":
+            return "khong_phai_tien", confidence
+        if confidence < self.conf_threshold:
+            return "khong_chac_chan", confidence
         return label, confidence
+
+    def predict(self, img_bgr):
+        return self._decide(self._infer_probs(img_bgr))
+
+    def predict_multi_frame(self, imgs_bgr):
+        """Gộp xác suất trên 3-5 khung hình liên tiếp (Temporal Softmax Averaging)."""
+        if not imgs_bgr:
+            raise ValueError("Danh sách ảnh đầu vào cho predict_multi_frame không được rỗng")
+        avg_probs = np.mean([self._infer_probs(im) for im in imgs_bgr], axis=0)
+        return self._decide(avg_probs)
 ```
 
-### 3. Khuyến nghị cấu hình ngưỡng khi chạy Webcam thực tế
-* **Nên đặt `conf_threshold = 0.70` – `0.75` (không nên đặt `0.90`):** Do mô hình dùng `label_smoothing = 0.1`, xác suất cực đại tự nhiên của các dự đoán đúng nằm quanh mức **`~91%`**. Thử nghiệm trên 813 ảnh Test cho thấy ngưỡng **`0.70` – `0.75`** chặn được **70/71 (98.6%)** ảnh không phải tiền và giảm lỗi nhầm giữa các mệnh giá đơn tờ về gần như **0%**, mà vẫn giữ tỷ lệ nhận tiền cao (**95.2% – 96.4%**).
-* **Chống nháy nhãn trên Webcam:** Chỉ chốt kết quả và phát giọng nói `pyttsx3` khi có **5–7 khung hình liên tiếp** cho ra cùng 1 mệnh giá.
+### 4. Phối hợp ghép nối nhanh theo từng thành viên (Hướng 3)
+* **TV3 (OpenCV & Khung phần cứng):** Trả thêm tọa độ tâm `(cx, cy)` kèm ảnh cắt `224×224`, kiểm tra tờ tiền đứng yên (~`0.3–0.5s`) rồi gọi `predict_multi_frame(...)`, đồng thời đặt vạch kiểm duyệt khe thả tiền (`Virtual Tripwire`) để chỉ xác nhận giao dịch khi tờ tiền đi qua khe hộp và rời khay (chặn hành vi đặt tiền rồi rút về).
+* **TV1 (Giao diện PySide6):** Hiển thị tiến độ mục tiêu chiến dịch, bảng sao kê trực tiếp, phát âm thanh cảm ơn khi nhận xác nhận hợp lệ và **không** cho người dùng công cộng tự sửa mệnh giá khi gặp `khong_chac_chan`.
+* **TV4 (Lưu trữ & Kiểm thử):** Ghi nhật ký sao kê (`CSV`/`SQLite`) kèm ảnh bằng chứng `224×224` khi giao dịch thành công; kiểm thử thêm các tình huống thả tiền bình thường, đặt rồi rút tay về, đưa vật lạ (thẻ, giấy trắng, tay) và đối soát tổng quỹ với tiền thật trong hộp.
+
+### 5. Khuyến nghị cấu hình ngưỡng khi chạy Webcam thực tế
+* **Nên đặt `conf_threshold = 0.70` – `0.75` (không nên đặt `0.90`):** Do mô hình dùng `label_smoothing = 0.1`, xác suất cực đại tự nhiên của các dự đoán đúng nằm quanh mức **`~91%`**. Ở ngưỡng `0.75` kết hợp `predict_multi_frame`, mô hình chặn tốt vật lạ mà không làm rớt oan tiền thật bị cũ hoặc hơi nhăn.
 
 ---
 
@@ -165,20 +211,20 @@ class CurrencyClassifier:
 
 > **Yêu cầu:** Python **3.12** (tránh dùng Python 3.14 do chưa tương thích đầy đủ với PyTorch/OpenCV).
 
-```bash
+```powershell
 # 1. Tạo và kích hoạt môi trường ảo (Windows PowerShell)
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# 2. Cài đặt thư viện
-pip install -r requirements.txt
+# 2A. Nếu chỉ chạy triển khai nhẹ (ONNX + OpenCV, không cần PyTorch)
+pip install opencv-python numpy onnxruntime pillow
 
-# 3. Nếu chạy triển khai nhẹ bằng file .onnx
-pip install onnxruntime
+# 2B. Hoặc cài đầy đủ toàn bộ môi trường (bao gồm PyTorch để chạy lại notebook test_models.ipynb)
+pip install -r requirements.txt
 ```
 
 ---
 
 ## 📝 Hạn chế & Hướng phát triển (v2)
 1. **Ánh sáng chói (`1.5×`):** Tiền polymer dễ bị lóa dưới đèn mạnh làm độ chính xác tụt về 85% — bản v2 nên tăng biên độ `brightness_limit` lên `0.35–0.45` khi augmentation.
-2. **Đa dạng lớp `khong_phai_tien`:** Hiện tập train chỉ có 291 ảnh nền cắt từ ảnh tiền; bổ sung thêm ~500–800 ảnh đồ vật đời thực (đặc biệt đồ màu xanh dương như chai nước, mặt bàn, thẻ cầm tay) sẽ giảm triệt để tỷ lệ báo giả ở bối cảnh phức tạp.
+2. **Dữ liệu lớp `khong_phai_tien` & tiền thật trên khay LED thật (v2):** Khi lắp xong hộp quyên góp và đèn LED, chụp bổ sung ảnh bàn tay đẩy tiền, thẻ sinh viên, hóa đơn gấp, giấy trắng và tiền thật (đặc biệt cặp `20.000đ`/`500.000đ`, `10.000đ`/`200.000đ`) trên khay đen thật để fine-tune nhẹ bản `v2`.
