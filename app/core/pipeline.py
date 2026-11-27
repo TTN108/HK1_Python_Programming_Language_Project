@@ -38,13 +38,17 @@ class Detection:
         return self.note.corners
 
 
-def _overlapping(corners: list[np.ndarray], ratio: float) -> set[int]:
-    """Chỉ số các tờ giao nhau với tờ khác quá `ratio` (so với tờ nhỏ hơn)."""
-    flagged: set[int] = set()
-    areas = [cv2.contourArea(c.astype(np.float32)) for c in corners]
-    for i in range(len(corners)):
-        for j in range(i + 1, len(corners)):
-            inter, _ = cv2.intersectConvexConvex(corners[i].astype(np.float32), corners[j].astype(np.float32))
+def _overlapping(corners, ratio, shrink=0.92):          # thêm tham số shrink
+    flagged = set()
+    shr = []                                            # mới
+    for c in corners:                                   # mới
+        c = c.astype(np.float32)                        # mới
+        ctr = c.mean(axis=0)                            # mới
+        shr.append(ctr + (c - ctr) * shrink)            # mới
+    areas = [cv2.contourArea(c) for c in shr]           # đổi: dùng shr
+    for i in range(len(shr)):                           # đổi: dùng shr
+        for j in range(i + 1, len(shr)):
+            inter, _ = cv2.intersectConvexConvex(shr[i], shr[j])   # đổi: dùng shr
             if inter > ratio * max(min(areas[i], areas[j]), 1.0):
                 flagged.update((i, j))
     return flagged

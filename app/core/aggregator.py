@@ -44,6 +44,9 @@ class _Track:
     manual: str | None = None
     guess: str | None = None        # nhãn dự đoán của khung gần nhất (để hiển thị gợi ý)
     guess_conf: float = 0.0
+    locked: str | None = None       # mới: nhãn đã khoá, giữ suốt lượt
+    conflict: int = 0               # mới: số phiếu liên tiếp trái với nhãn đã khoá
+    angle: float | None = None      # mới: hướng cạnh dài ở khung trước (độ, mod 180)
 
 
 @dataclass(frozen=True)
@@ -115,7 +118,7 @@ class Aggregator:
         for ti, t in enumerate(self._tracks):
             if ti not in matched_t:
                 t.missed += 1
-        self._tracks = [t for t in self._tracks if t.missed <= config.MAX_MISSED_FRAMES]
+        self._tracks = [t for t in self._tracks if t.missed <= (config.MAX_MISSED_LOCKED if t.locked else config.MAX_MISSED_FRAMES)]
         for di, d in enumerate(detections):
             if di not in matched_d:
                 t = _Track(self._next_id, d.box, d.corners)
@@ -149,29 +152,53 @@ class Aggregator:
 
     # ------------------------------------------------------------ nội bộ
     def _apply(self, t: _Track, d: Detection) -> None:
+        v = d.corners[1] - d.corners[0]
+        ang = float(np.degrees(np.arctan2(v[1], v[0]))) % 180.0
+        fast = False
+        if t.angle is not None:
+            da = abs(ang - t.angle)
+            fast = min(da, 180.0 - da) > config.ROT_SKIP_DEG
+        t.angle = ang
         t.box, t.corners, t.reasons = d.box, d.corners, d.reasons
         res = d.result
         if res is not None:
             t.guess, t.guess_conf = res.label, res.confidence
-        if res is None or any(r in config.NO_VOTE_REASONS for r in d.reasons):
+        if res is None or fast or any(r in config.NO_VOTE_REASONS for r in d.reasons):
             return
         key = res.label if res.status in ("ok", "not_money") else UNCERTAIN_KEY
         t.history.append((key, max(config.VOTE_WEIGHT_MIN, d.rect.quality)))
+        label, share = self._decide(t)
+        if label is None or share < config.LOCK_RATIO:
+            return
+        if t.locked is None:
+            t.locked = label
+        elif label == t.locked:
+            t.conflict = 0
+        else:
+            t.conflict += 1
+            if t.conflict >= config.LOCK_OVERRIDE_VOTES:
+                t.locked, t.conflict = label, 0
 
     def _match(self, dets: Sequence[Detection]) -> list[tuple[int, int]]:
         pairs = []
         for ti, t in enumerate(self._tracks):
             long_side = max(t.box[2] - t.box[0], t.box[3] - t.box[1], 1.0)
             tc = np.array([(t.box[0] + t.box[2]) / 2, (t.box[1] + t.box[3]) / 2])
+            t_area = cv2.contourArea(t.corners.astype(np.float32))                       # mới
+            max_dist = (config.TRACK_MAX_CENTER_DIST_LOST if t.locked and t.missed > 0   # mới
+                        else config.TRACK_MAX_CENTER_DIST)
             for di, d in enumerate(dets):
                 iou = _poly_iou(t.corners, d.corners)
                 if iou >= config.TRACK_MIN_IOU:
                     pairs.append((1.0 + iou, ti, di))
                     continue
+                d_area = cv2.contourArea(d.corners.astype(np.float32))                   # mới
+                if not (0.5 <= d_area / max(t_area, 1.0) <= 2.0):                        # mới: cùng cỡ mới ghép
+                    continue
                 dc = np.array([(d.box[0] + d.box[2]) / 2, (d.box[1] + d.box[3]) / 2])
                 dist = float(np.linalg.norm(tc - dc)) / long_side
-                if dist <= config.TRACK_MAX_CENTER_DIST:
-                    pairs.append((1.0 - dist / config.TRACK_MAX_CENTER_DIST, ti, di))
+                if dist <= max_dist:                                                     # đổi
+                    pairs.append((1.0 - dist / max_dist, ti, di))                        # đổi
         pairs.sort(key=lambda p: -p[0])
         used_t, used_d, out = set(), set(), []
         for _, ti, di in pairs:
@@ -198,11 +225,14 @@ class Aggregator:
 
     def _view(self, t: _Track) -> TrackView:
         warnings = [r for r in t.reasons if r in config.WARNING_REASONS]
-        if t.manual:  # người dùng đã nhìn tận mắt nên bỏ qua cảnh báo "bị che" (heuristic)
+        if t.manual:
             warnings = [r for r in warnings if r != "occluded"]
         label, share = self._decide(t)
         if t.manual:
             label, share = t.manual, 1.0
+        elif t.locked:                                       
+            label, share = t.locked, max(share, config.LOCK_RATIO)
+            warnings = []                                 
         if warnings:
             status, value = STATUS_WARNING, 0
         elif label is None:
@@ -216,12 +246,14 @@ class Aggregator:
                          t.reasons, t.missed == 0, t.age, t.guess, t.guess_conf)
 
     def _build_state(self, advance: bool) -> FrameState:
-        views = sorted((self._view(t) for t in self._tracks), key=lambda v: v.box[0])
+        all_views = sorted((self._view(t) for t in self._tracks), key=lambda v: v.box[0])   # đổi tên
+        views = [v for v in all_views
+                if config.SHOW_NOT_MONEY or v.status != STATUS_NOT_MONEY]                  # mới: bỏ khung không phải tiền
         total = sum(v.value for v in views if v.status in COUNTED)
         n_money = sum(v.status in COUNTED for v in views)
         n_unrec = sum(v.status == STATUS_UNCERTAIN for v in views)
         n_warn = sum(v.status == STATUS_WARNING for v in views)
-        n_not = sum(v.status == STATUS_NOT_MONEY for v in views)
+        n_not = sum(v.status == STATUS_NOT_MONEY for v in all_views)   # đổi: đếm trên all_views
 
         just = False
         if advance:

@@ -54,6 +54,7 @@ FAST_START_CLASSIFY = 3     # vật mới được phân loại MỌI khung cho 
 
 # Lọc vật không phải tiền bằng bộ phân loại (nhận ra màu/hoa văn tiền thật tốt hơn hình học thuần tuý)
 HIDE_NOT_MONEY = True       # ẩn vật bị xác nhận "khong_phai_tien" (bật/tắt ngay trong giao diện)
+SHOW_NOT_MONEY = False      # False = không đưa tờ "không phải tiền" ra giao diện
 HIDE_NOT_MONEY_CONF = 0.80  # độ tin cậy tối thiểu của kết luận "không phải tiền" để được tính là chắc chắn
 NOT_MONEY_CONFIRM = 2       # số lần phân loại liên tiếp chắc chắn là "không phải tiền" mới ẩn (tránh ẩn nhầm tờ thật vì một khung xấu)
 REJECT_RECHECK = 4          # vật đã ẩn chỉ được kiểm tra lại mỗi N lượt phân loại (đỡ tốn thời gian)
@@ -70,7 +71,7 @@ MIN_AREA_RATIO = 0      # tờ chiếm ít hơn tỉ lệ này của khung -> "t
 MIN_SHARPNESS = 20.0        # phương sai Laplacian của ảnh nắn phẳng; thấp hơn -> "blur"
 MAX_OCCLUSION = 10       # mức bị che ước lượng; cao hơn -> "occluded"
 EDGE_MARGIN_PX = 0          # góc cách mép khung ít hơn số này -> "cut_by_edge"
-OVERLAP_RATIO = 0.05        # hai tờ giao nhau quá tỉ lệ này (so với tờ nhỏ hơn) -> "overlap"
+OVERLAP_RATIO = 0.25        # hai tờ giao nhau quá tỉ lệ này (so với tờ nhỏ hơn) -> "overlap"
 
 # Các lý do chất lượng, chia hai nhóm:
 WARNING_REASONS = ("overlap", "cut_by_edge", "occluded")   # cảnh báo: chặn xác nhận, không cộng tiền
@@ -150,6 +151,11 @@ VOTE_WEIGHT_MIN = 0.20      # trọng số phiếu thấp nhất
 TOTAL_STABLE_FRAMES = 12    # tổng giữ nguyên số khung này -> "đã ổn định"
 RELEASE_FRAMES = 15         # không thấy tờ nào số khung này -> được ghi lượt mới
 NEW_TRACK_MIN_AGE = 10      # tờ mới phải sống số khung này mới tính là "tập tờ đã đổi"
+LOCK_RATIO = 0.80           # đồng thuận ≥ mức này thì khoá nhãn của tờ trong cả lượt
+MAX_MISSED_LOCKED = 90  # tờ đã khoá mất tạm thời tới số khung này vẫn giữ (còn tờ chưa khoá vẫn dùng MAX_MISSED_FRAMES)
+ROT_SKIP_DEG = 12.0              # tờ xoay quá số độ này giữa 2 khung -> khung đó không bỏ phiếu
+LOCK_OVERRIDE_VOTES = 12         # cần chừng này phiếu LIÊN TIẾP nhãn khác mới đổi nhãn đã khoá
+TRACK_MAX_CENTER_DIST_LOST = 1.2 # tờ đã khoá đang mất tạm thời: ghép lại rộng hơn (bình thường 0.60)
 
 # ----------------------------------------------------------------------------
 # Âm báo
