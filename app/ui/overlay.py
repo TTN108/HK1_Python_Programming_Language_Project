@@ -24,6 +24,8 @@ _REASON_ASCII = {
 
 
 def _label_text(v: TrackView) -> str:
+    if v.donated:                                        # mới
+        return f"{fmt_number(v.value)} vao khe"
     if v.status in COUNTED:
         return f"{fmt_number(v.value)}"
     if v.status == "not_money":
@@ -60,3 +62,23 @@ def draw_tracks(frame_bgr: np.ndarray, state: FrameState) -> np.ndarray:
         cv2.putText(out, text, (x0 + 6, y0 - 3), cv2.FONT_HERSHEY_SIMPLEX, scale,
                     (20, 20, 20), 2, cv2.LINE_AA)
     return out
+
+def draw_slot(img: np.ndarray, pts, locked: bool) -> np.ndarray:        # mới
+    """Vẽ vùng khe bỏ tiền lên khung đã vẽ (sửa thẳng img). locked=False: đang chọn, hiện các điểm đã bấm."""
+    if pts is None or len(pts) == 0:
+        return img
+    p = np.round(np.asarray(pts, np.float32)).astype(np.int32).reshape(-1, 1, 2)
+    color = theme.hex_to_bgr(theme.GOOD if locked else theme.WARN)
+    thick = max(2, img.shape[1] // 420)
+    closed = locked or len(p) >= 4
+    if closed and len(p) >= 3:
+        shade = img.copy()
+        cv2.fillPoly(shade, [p], color)
+        cv2.addWeighted(shade, 0.25, img, 0.75, 0, dst=img)
+    cv2.polylines(img, [p], closed, color, thick, cv2.LINE_AA)
+    for x, y in p.reshape(-1, 2):
+        cv2.circle(img, (int(x), int(y)), thick + 3, color, -1, cv2.LINE_AA)
+    x0, y0 = int(p[:, 0, 0].min()), int(p[:, 0, 1].min())
+    cv2.putText(img, "KHE" if locked else f"chon khe {len(p)}/4", (x0, max(y0 - 8, 20)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+    return img

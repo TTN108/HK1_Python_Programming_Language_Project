@@ -36,8 +36,8 @@ EXPORT_DIR = OUTPUT_DIR / "exports"
 CAMERA_SOURCE = 0
 CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
-CAMERA_FPS = 30
-LOCK_EXPOSURE = False       # khoá phơi sáng / cân bằng trắng (tuỳ hệ điều hành, bật bằng --lock-exposure)
+CAMERA_FPS = 10
+LOCK_EXPOSURE = True       # khoá phơi sáng / cân bằng trắng (tuỳ hệ điều hành, bật bằng --lock-exposure)
 FOCUS_VALUE = None          # số = tắt autofocus và khoá nét ở giá trị này (tuỳ driver; None = để camera tự lấy nét)
 EXPOSURE_VALUE = None       # số = tắt tự phơi sáng và đặt thời gian phơi sáng (DirectShow thường là số âm, vd -6)
 
@@ -69,12 +69,12 @@ MAX_NOTES = 5
 # ----------------------------------------------------------------------------
 MIN_AREA_RATIO = 0      # tờ chiếm ít hơn tỉ lệ này của khung -> "too_small" (không phân loại)
 MIN_SHARPNESS = 20.0        # phương sai Laplacian của ảnh nắn phẳng; thấp hơn -> "blur"
-MAX_OCCLUSION = 10       # mức bị che ước lượng; cao hơn -> "occluded"
+MAX_OCCLUSION = 20       # mức bị che ước lượng; cao hơn -> "occluded"
 EDGE_MARGIN_PX = 0          # góc cách mép khung ít hơn số này -> "cut_by_edge"
-OVERLAP_RATIO = 0.25        # hai tờ giao nhau quá tỉ lệ này (so với tờ nhỏ hơn) -> "overlap"
+OVERLAP_RATIO = 0.60        # hai tờ giao nhau quá tỉ lệ này (so với tờ nhỏ hơn) -> "overlap"
 
 # Các lý do chất lượng, chia hai nhóm:
-WARNING_REASONS = ("overlap", "cut_by_edge", "occluded")   # cảnh báo: chặn xác nhận, không cộng tiền
+WARNING_REASONS = ("cut_by_edge", "occluded")   # cảnh báo: chặn xác nhận, không cộng tiền
 NO_VOTE_REASONS = WARNING_REASONS + ("blur", "too_small")  # khung có lý do này không được bỏ phiếu
 
 # ----------------------------------------------------------------------------
@@ -161,3 +161,20 @@ TRACK_MAX_CENTER_DIST_LOST = 1.2 # tờ đã khoá đang mất tạm thời: gh�
 # Âm báo
 # ----------------------------------------------------------------------------
 SOUND_ENABLED = True
+
+# ----------------------------------------------------------------------------
+# Trạm quyên góp (Hướng 3)                                                      # mới
+# ----------------------------------------------------------------------------
+KIOSK_MODE = True            # True: chỉ cộng tiền khi tờ vào khe; False: đếm tờ đang trong khung như cũ
+SLOT_MODE = "drop"           # "drop": tờ biến mất ngay tại khe = rơi xuống thùng | "tray": tờ nằm trong vùng khay đủ lâu
+SLOT_MARGIN_PX = 20          # tâm tờ cách vùng khe tối đa chừng này px vẫn tính là "trong khe"
+SLOT_MIN_AGE = 6             # tờ phải được theo dõi ít nhất chừng này khung (loại vật lướt qua)
+SLOT_LOST_FRAMES = 4         # (drop) tờ mất chừng này khung khi vị trí cuối trong khe -> chốt; PHẢI <= MAX_MISSED_FRAMES
+SLOT_DWELL_FRAMES = 8        # (tray) tâm tờ nằm trong vùng liên tiếp chừng này khung -> chốt
+SNAPSHOT_QUALITY = 90
+SNAPSHOT_CROP = True         # cắt ảnh nhật ký quanh khe + tờ (nhỏ hơn, ít lộ người xung quanh)
+SNAPSHOT_PAD_PX = 60
+AUDIT_LOG_PATH = OUTPUT_DIR / "nhat_ky_quyen_gop.jsonl"
+DASHBOARD_RECENT = 10        # số lượt gần nhất đưa vào engine.dashboard()
+CAMERA_RECONNECT_TRIES = 10  # webcam đứt: thử nối lại chừng này lần
+CAMERA_RECONNECT_WAIT = 1.0  # giây giữa hai lần thử

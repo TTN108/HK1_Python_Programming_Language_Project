@@ -51,7 +51,7 @@ class _Row(ctk.CTkFrame):
         self._menu.grid(row=0, column=3, rowspan=2, padx=10)
 
     def refresh(self, v: TrackView, menu_text: str) -> None:
-        key = (v.status, v.label, v.value, v.guess, round(v.confidence, 2), v.visible, v.reasons, menu_text)
+        key = (v.status, v.label, v.value, v.guess, round(v.confidence, 2), v.visible, v.reasons, menu_text, v.donated)
         if key == self._cache:
             return
         self._cache = key
@@ -69,14 +69,15 @@ class _Row(ctk.CTkFrame):
         warn = [texts.REASON_TEXT.get(r, r) for r in v.reasons if r in config.WARNING_REASONS]
         if warn:
             sub += " (" + ", ".join(warn) + ")"
-        elif v.status == "stable":
-            sub += f" · {v.confidence:.0%}"
-        if not v.visible:
+        if v.donated:                                                     # mới
+            sub = texts.DONATED_TEXT
+        elif not v.visible:                                               # đổi: if -> elif
             sub += texts.LOST_SUFFIX
         self._bar.configure(fg_color=color)
         self._title.configure(text=title, text_color=theme.TEXT if v.visible else theme.MUTED)
         self._sub.configure(text=sub)
         self._menu.set(menu_text)
+        self._menu.configure(state="disabled" if v.donated else "normal")
 
 
 class NoteList(ctk.CTkFrame):

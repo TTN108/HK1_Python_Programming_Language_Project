@@ -14,6 +14,7 @@ Tờ mất tạm thời <= MAX_MISSED_FRAMES khung vẫn được giữ nên t�
 from __future__ import annotations
 
 from collections import deque
+import time
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -31,6 +32,20 @@ STATUS_UNCERTAIN = "uncertain"
 STATUS_WARNING = "warning"
 COUNTED = (STATUS_STABLE, STATUS_MANUAL)
 
+@dataclass(frozen=True)                                                      # mới
+class Donation:
+    seq: int
+    track_id: int
+    label: str | None          # None = lúc vào khe chưa nhận diện được (cần người kiểm tra)
+    value: int                 # 0 nếu label là None
+    confidence: float
+    manual: bool
+    t: float                   # time.time() lúc vào khe
+    total_after: int           # tổng quyên góp tích luỹ sau lượt này
+    review: bool               # True = cần nhân viên kiểm tra
+    corners: np.ndarray = field(repr=False, compare=False)
+    snapshot: np.ndarray | None = field(default=None, repr=False, compare=False)
+    snapshot_file: str = ""
 
 @dataclass
 class _Track:
@@ -47,7 +62,10 @@ class _Track:
     locked: str | None = None       # mới: nhãn đã khoá, giữ suốt lượt
     conflict: int = 0               # mới: số phiếu liên tiếp trái với nhãn đã khoá
     angle: float | None = None      # mới: hướng cạnh dài ở khung trước (độ, mod 180)
-
+    in_slot: int = 0               # mới: số khung liên tiếp tâm tờ nằm trong khe
+    last_in: bool = False          # mới: khung thấy gần nhất có nằm trong khe không
+    counted: bool = False          # mới: đã cộng vào quyên góp (mỗi tờ một lần)
+    snap: np.ndarray | None = None # mới: khung hình gần nhất thấy tờ (để chụp ảnh nhật ký)
 
 @dataclass(frozen=True)
 class TrackView:
@@ -64,6 +82,7 @@ class TrackView:
     age: int
     guess: str | None
     guess_conf: float
+    donated: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,7 +97,10 @@ class FrameState:
     just_stabilized: bool      # đúng khung vừa chuyển sang ổn định (để phát âm báo một lần)
     stable_frames: int
     released_frames: int       # số khung liên tiếp không thấy tờ nào (khay trống)
-
+    donated_total: int = 0         # mới: TỔNG QUYÊN GÓP tích luỹ (khác `total` = tờ đang trong khung)
+    donation_count: int = 0        # mới
+    new_donations: tuple = ()      # mới: các lượt vừa chốt ở khung này
+    
     @property
     def has_warning(self) -> bool:
         return self.n_warning > 0
@@ -102,10 +124,13 @@ class Aggregator:
         self._empty_frames = 0
         self._stable_frames = 0
         self._last_sig: tuple | None = None
+        self._slot: np.ndarray | None = None   # mới: vùng khe (khoá sau lần đặt đầu)
+        self._donated_total = 0                # mới: KHÔNG xoá trong reset()
+        self._donation_count = 0               # mới        
         self.state: FrameState = self._build_state(False)
 
     # ------------------------------------------------------------------ API
-    def update(self, detections: Sequence[Detection]) -> FrameState:
+    def update(self, detections, frame: np.ndarray | None = None) -> FrameState:
         matches = self._match(detections)
         matched_t = {ti for ti, _ in matches}
         matched_d = {di for _, di in matches}
@@ -115,6 +140,7 @@ class Aggregator:
             t.missed = 0
             t.age += 1
             self._apply(t, d)
+            t.snap = frame
         for ti, t in enumerate(self._tracks):
             if ti not in matched_t:
                 t.missed += 1
@@ -124,11 +150,12 @@ class Aggregator:
                 t = _Track(self._next_id, d.box, d.corners)
                 self._next_id += 1
                 self._apply(t, d)
+                t.snap = frame
                 self._tracks.append(t)
 
         visible = any(t.missed == 0 for t in self._tracks)
         self._empty_frames = 0 if visible else self._empty_frames + 1
-        self.state = self._build_state(True)
+        self.state = self._build_state(True, self._check_slot())
         return self.state
 
     def set_manual(self, track_id: int, label: str | None) -> bool:
@@ -222,6 +249,58 @@ class Aggregator:
         if key == UNCERTAIN_KEY or share < config.CONSENSUS_RATIO:
             return None, share
         return key, share
+    
+    @property
+    def slot(self) -> np.ndarray | None:
+        return self._slot
+
+    def set_slot(self, points) -> None:
+        """Đặt vùng khe (>= 3 điểm, pixel của khung gốc). Chỉ đặt được MỘT lần, khoá tới khi chạy lại chương trình."""
+        if self._slot is not None:
+            raise RuntimeError("Vùng khe đã khoá; muốn đổi phải chạy lại chương trình")
+        pts = np.asarray(points, np.float32).reshape(-1, 2)
+        if len(pts) < 3 or cv2.contourArea(pts) <= 0:
+            raise ValueError("Vùng khe cần ít nhất 3 điểm không thẳng hàng")
+        self._slot = pts
+
+    def _in_slot(self, corners: np.ndarray) -> bool:
+        c = np.asarray(corners, np.float32).mean(axis=0)
+        return cv2.pointPolygonTest(self._slot, (float(c[0]), float(c[1])), True) >= -config.SLOT_MARGIN_PX
+
+    def _check_slot(self) -> tuple[Donation, ...]:
+        """Tờ nào vừa được bỏ vào khe thì chốt một lượt. Mỗi track chỉ cộng một lần."""
+        if not config.KIOSK_MODE or self._slot is None:
+            return ()
+        out = []
+        for t in self._tracks:
+            if t.counted:
+                continue
+            if t.missed == 0:
+                t.last_in = self._in_slot(t.corners)
+                t.in_slot = t.in_slot + 1 if t.last_in else 0
+            if t.age < config.SLOT_MIN_AGE:
+                continue
+            if config.SLOT_MODE == "tray":           # tờ nằm trong vùng khay đủ lâu
+                hit = t.in_slot >= config.SLOT_DWELL_FRAMES
+            else:                                    # "drop": tờ biến mất ngay tại khe = đã rơi xuống thùng
+                hit = t.missed == config.SLOT_LOST_FRAMES and t.last_in
+            if not hit:
+                continue
+            v = self._view(t)
+            known = v.status in COUNTED
+            if v.status == STATUS_NOT_MONEY or (not known and config.SLOT_MODE == "tray"):
+                continue                             # vật lạ không tính; (tray) chưa chốt nhãn thì chờ tiếp
+            out.append(self._commit(t, v, known))
+        return tuple(out)
+
+    def _commit(self, t: _Track, v: TrackView, known: bool) -> Donation:
+        t.counted = True
+        value = v.value if known else 0              # chưa nhận diện: vẫn ghi lượt, value 0, đánh dấu review
+        self._donated_total += value
+        self._donation_count += 1
+        return Donation(self._donation_count, t.id, v.label if known else None, value, v.confidence,
+                        v.manual, time.time(), self._donated_total, not known, t.corners.copy(), t.snap)
+
 
     def _view(self, t: _Track) -> TrackView:
         warnings = [r for r in t.reasons if r in config.WARNING_REASONS]
@@ -243,14 +322,15 @@ class Aggregator:
             status = STATUS_MANUAL if t.manual else STATUS_STABLE
             value = config.class_to_value(label)
         return TrackView(t.id, t.box, t.corners, label, value, status, share, bool(t.manual),
-                         t.reasons, t.missed == 0, t.age, t.guess, t.guess_conf)
+                         t.reasons, t.missed == 0, t.age, t.guess, t.guess_conf, t.counted)
 
-    def _build_state(self, advance: bool) -> FrameState:
+    def _build_state(self, advance: bool, new: tuple = ()) -> FrameState:
         all_views = sorted((self._view(t) for t in self._tracks), key=lambda v: v.box[0])   # đổi tên
         views = [v for v in all_views
                 if config.SHOW_NOT_MONEY or v.status != STATUS_NOT_MONEY]                  # mới: bỏ khung không phải tiền
-        total = sum(v.value for v in views if v.status in COUNTED)
-        n_money = sum(v.status in COUNTED for v in views)
+        live = [v for v in views if not v.donated]                                   # mới: tờ đã vào khe không tính là "đang trong khung"
+        total = sum(v.value for v in live if v.status in COUNTED)                    # đổi: views -> live
+        n_money = sum(v.status in COUNTED for v in live)                             # đổi: views -> live
         n_unrec = sum(v.status == STATUS_UNCERTAIN for v in views)
         n_warn = sum(v.status == STATUS_WARNING for v in views)
         n_not = sum(v.status == STATUS_NOT_MONEY for v in all_views)   # đổi: đếm trên all_views
@@ -267,4 +347,5 @@ class Aggregator:
             self._last_sig = sig
         stable = self._stable_frames >= config.TOTAL_STABLE_FRAMES
         return FrameState(views, total, n_money, n_unrec, n_warn, n_not, stable, just,
-                          self._stable_frames, self._empty_frames)
+                          self._stable_frames, self._empty_frames,
+                          self._donated_total, self._donation_count, new)            # đổi: thêm 3 giá trị

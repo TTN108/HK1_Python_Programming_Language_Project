@@ -12,6 +12,7 @@ from pathlib import Path
 import customtkinter as ctk
 import cv2
 import numpy as np
+import time   
 
 from app import config
 from app.core import model_registry
@@ -20,7 +21,7 @@ from app.engine import Engine
 from app.services.speech import Speaker
 from app.services.storage import SessionLog, save_snapshot
 from app.ui import texts, theme
-from app.ui.overlay import draw_tracks
+from app.ui.overlay import draw_slot, draw_tracks 
 from app.ui.widgets.action_bar import ActionBar
 from app.ui.widgets.control_bar import ControlBar
 from app.ui.widgets.header import Header
@@ -29,10 +30,11 @@ from app.ui.widgets.settings_panel import SettingsPanel
 from app.ui.widgets.status_bar import StatusBar
 from app.ui.widgets.total_card import TotalCard
 from app.ui.widgets.video_panel import VideoPanel
+from app.ui.widgets.dashboard_window import DashboardWindow
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 TICK_MS = 33          # ~30 lần/giây cập nhật giao diện
-
+SLOT_POINTS = 4
 
 class App(ctk.CTk):
     def __init__(self, engine: Engine, speaker: Speaker, session: SessionLog,
@@ -43,6 +45,14 @@ class App(ctk.CTk):
         self._last_state = None
         self._last_id = -1
         self._running_ui = False
+
+        self._picking = False                          # mới: đang chọn vùng khe
+        self._need_slot = False                        # mới: vừa mở nguồn mà chưa có khe -> tự vào chế độ chọn
+        self._pick_pts: list[tuple[int, int]] = []     # mới: điểm đã bấm (toạ độ khung gốc)
+        self._slot_wh: tuple[int, int] | None = None   # mới: kích thước khung lúc chọn khe
+        self._size_warned = False                      # mới
+        self._dash: DashboardWindow | None = None      # mới
+        self._dash_poll = 0.0                          # mới
 
         self.title(texts.WINDOW_TITLE)
         self.geometry(theme.WINDOW_SIZE)
@@ -74,7 +84,7 @@ class App(ctk.CTk):
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         left.grid_columnconfigure(0, weight=1)
         left.grid_rowconfigure(0, weight=1)
-        self.video = VideoPanel(left)
+        self.video = VideoPanel(left, on_click=self._on_video_click, on_undo=self._undo_pick)   # đổi
         self.video.grid(row=0, column=0, sticky="nsew", padx=14, pady=(14, 10))
         self.controls = ControlBar(left, on_toggle=self._toggle, on_open=self._open_file,
                                    on_snapshot=self._snapshot)
@@ -100,7 +110,9 @@ class App(ctk.CTk):
                                       on_model=self._switch_model,
                                       hide=config.HIDE_NOT_MONEY, on_hide=self.engine.set_hide_not_money)
         self.settings.grid(row=2, column=0, sticky="ew", padx=14, pady=(8, 8))
-        self.actions = ActionBar(right, on_commit=self._commit, on_reset=self._reset, on_export=self._export)
+        self.actions = ActionBar(right, on_commit=self._commit, on_reset=self._reset, on_export=self._export,
+                                 on_slot=self._begin_pick, on_dashboard=self._open_dashboard,
+                                 kiosk=config.KIOSK_MODE)                                         # đổi
         self.actions.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 14))
 
         self.status = StatusBar(self)
@@ -148,15 +160,20 @@ class App(ctk.CTk):
         if out.state is not self._last_state or out.frame_id != self._last_id:
             self._last_state, self._last_id = out.state, out.frame_id
             if out.frame is not None:
-                self.video.show(draw_tracks(out.frame, out.state))
-            self.total_card.update_state(out.state)
+                self._watch_slot(out.frame)                                     # mới
+                self.video.show(self._render(out)) 
+            self.total_card.update_state(out.state, self.engine.slot_ready) 
             self.note_list.update_state(out.state)
             self.header.set_fps(out.fps)
             self.status.set_timings(out.timings)
 
         for event in self.engine.pop_events():          # tổng vừa ổn định -> đọc to đúng một lần
             self.speaker.say_total(event.total, event.n_notes)
-
+            
+        for d in self.engine.pop_donations():           # mới: tờ vừa vào khe
+            self._on_donation(d)
+        self._poll_dashboard()                          # mới
+        
         if out.ended and not self.engine.running and self._running_ui:
             self._finish_source(out.message)
         self.after(TICK_MS, self._tick)
@@ -176,6 +193,7 @@ class App(ctk.CTk):
             self.status.flash(str(exc), theme.DANGER)
             return
         self._set_running(True)
+        self._need_slot = config.KIOSK_MODE             # mới
 
     def _stop_source(self) -> None:
         self.engine.stop()
@@ -239,7 +257,7 @@ class App(ctk.CTk):
 
     def _reset(self) -> None:
         self.engine.reset()
-        self.status.flash("Đã làm lại lượt đếm", theme.MUTED)
+        self.status.flash(texts.RESET_DONE if config.KIOSK_MODE else "Đã làm lại lượt đếm", theme.MUTED)   # đổi
 
     def _export(self) -> None:
         if not self.session.entries:
@@ -259,6 +277,96 @@ class App(ctk.CTk):
 
     def _set_sound(self, enabled: bool) -> None:
         self.speaker.enabled = enabled
+
+    # ------------------------------------------------------------------ trạm quyên góp (mới)
+    def _render(self, out) -> np.ndarray:
+        img = draw_tracks(out.frame, out.state)
+        slot = self.engine.slot
+        if slot is not None:
+            return draw_slot(img, slot, locked=True)
+        return draw_slot(img, self._pick_pts, locked=False)
+
+    def _watch_slot(self, frame: np.ndarray) -> None:
+        """Mở nguồn mà chưa có khe -> tự vào chế độ chọn; cảnh báo nếu độ phân giải đổi sau khi chọn."""
+        if self._need_slot and not self.engine.slot_ready:
+            self._begin_pick()
+        size = (frame.shape[1], frame.shape[0])
+        if self._slot_wh and size != self._slot_wh and not self._size_warned:
+            self._size_warned = True
+            self.status.flash(texts.SLOT_SIZE_CHANGED, theme.DANGER, 10.0)
+
+    def _begin_pick(self) -> None:
+        if self.engine.slot_ready:
+            self.status.flash(texts.SLOT_LOCKED_INFO, theme.WARN)
+            return
+        if self.engine.latest().frame is None:
+            self.status.flash(texts.SLOT_NEED_VIDEO, theme.WARN)
+            return
+        self._need_slot, self._picking, self._pick_pts = False, True, []
+        self.video.set_pickable(True)
+        self.status.flash(texts.SLOT_PICK_HELP, theme.WARN, 600.0)
+
+    def _undo_pick(self) -> None:
+        if self._picking and self._pick_pts:
+            self._pick_pts.pop()
+
+    def _on_video_click(self, x: int, y: int) -> None:
+        if not self._picking:
+            return
+        self._pick_pts.append((x, y))
+        if len(self._pick_pts) < SLOT_POINTS:
+            return
+        from tkinter import messagebox
+        pts = np.array(self._pick_pts, np.float32)
+        c = pts.mean(axis=0)
+        pts = pts[np.argsort(np.arctan2(pts[:, 1] - c[1], pts[:, 0] - c[0]))]    # xếp theo vòng, tránh bị bắt chéo
+        if not messagebox.askyesno(texts.SLOT_CONFIRM_TITLE, texts.SLOT_CONFIRM, parent=self):
+            self._pick_pts = []                                                    # chọn lại từ đầu
+            return
+        try:
+            self.engine.set_slot(pts)                                              # khoá: chỉ đổi được khi chạy lại chương trình
+        except (RuntimeError, ValueError) as exc:
+            self.status.flash(str(exc), theme.DANGER, 8.0)
+            self._pick_pts = []
+            return
+        frame = self.engine.latest().frame
+        self._slot_wh = (frame.shape[1], frame.shape[0]) if frame is not None else None
+        self._picking, self._pick_pts = False, []
+        self.video.set_pickable(False)
+        self.actions.set_slot_locked(True)
+        self.status.flash(texts.SLOT_LOCKED, theme.GOOD, 6.0)
+
+    def _on_donation(self, d) -> None:
+        """Một lượt quyên góp mới: lịch sử phiên, âm thanh cảm ơn, thông báo, biểu ngữ trên Dashboard."""
+        if d.value > 0:
+            self.session.add(d.value, {d.value: 1})
+            self._refresh_session()
+            say = getattr(self.speaker, "say_thanks", None)
+            if say is not None:
+                say(d.value, d.total_after)
+            else:
+                self.speaker.say_total(d.value, 1)       # tạm: speech.py chưa có say_thanks
+            self.status.flash(texts.DONATION_FLASH.format(seq=d.seq, value=texts.fmt_vnd(d.value),
+                                                          total=texts.fmt_vnd(d.total_after)), theme.GOOD, 5.0)
+        else:
+            self.status.flash(texts.DONATION_REVIEW.format(seq=d.seq), theme.WARN, 8.0)
+        if self._dash is not None and self._dash.winfo_exists():
+            self._dash.show_thanks(d)
+
+    def _open_dashboard(self) -> None:
+        if self._dash is not None and self._dash.winfo_exists():
+            self._dash.focus()
+            return
+        self._dash = DashboardWindow(self)
+        self._dash.update_data(self.engine.dashboard())
+
+    def _poll_dashboard(self) -> None:
+        if self._dash is None or not self._dash.winfo_exists():
+            return
+        now = time.time()
+        if now - self._dash_poll >= 0.25:                 # 4 lần/giây là đủ cho màn hình công khai
+            self._dash_poll = now
+            self._dash.update_data(self.engine.dashboard())
 
     # ------------------------------------------------------------------ đóng cửa sổ
     def _on_close(self) -> None:

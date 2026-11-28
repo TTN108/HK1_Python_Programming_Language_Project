@@ -19,11 +19,14 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+import json                                                      # mới
+from collections import deque                                    # mới
+from dataclasses import dataclass, field, replace                # đổi: thêm replace
+import cv2
 
 import numpy as np
 
-from app.core.aggregator import Aggregator, FrameState
+from app.core.aggregator import Aggregator, Donation, FrameState
 from app.core.camera import Camera
 from app import config
 from app.core import model_registry
@@ -57,7 +60,11 @@ class Engine:
         self.pipeline: Pipeline | None = None
         self.aggregator = Aggregator()
         self.events: "queue.SimpleQueue[StableEvent]" = queue.SimpleQueue()
-
+        self.donations: "queue.SimpleQueue[Donation]" = queue.SimpleQueue()   # mới: lượt mới cho giao diện (âm thanh cảm ơn)
+        self.recent: deque = deque(maxlen=config.DASHBOARD_RECENT)             # mới
+        self.audit_error: str | None = None                                    # mới
+        self._session = time.strftime("%Y%m%d_%H%M%S")                         # mới
+        
         self._lock = threading.Lock()             # bảo vệ aggregator (luồng nền + giao diện cùng dùng)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -180,6 +187,78 @@ class Engine:
         if self.classifier is not None:
             self.classifier.use_tta = bool(enabled)
 
+    # ------------------------------------------------------------------ trạm quyên góp (mới)
+    @property
+    def slot_ready(self) -> bool:
+        return self.aggregator.slot is not None
+    @property
+    def slot(self):                                  # mới: vùng khe (None nếu chưa chọn) để giao diện vẽ
+        return self.aggregator.slot
+    
+    def set_slot(self, points) -> None:
+        """Đặt vùng khe (pixel của khung gốc). Chỉ một lần, khoá tới khi chạy lại chương trình."""
+        with self._lock:
+            self.aggregator.set_slot(points)
+
+    def pop_donations(self) -> list[Donation]:
+        out = []
+        while True:
+            try:
+                out.append(self.donations.get_nowait())
+            except queue.Empty:
+                return out
+
+    def dashboard(self) -> dict:
+        """Dữ liệu cho Live Dashboard công khai (chỉ có số, không có ảnh)."""
+        with self._lock:
+            st = self.aggregator.state
+            recent = [dict(seq=d.seq, value=d.value, review=d.review,
+                           time=time.strftime("%H:%M:%S", time.localtime(d.t))) for d in self.recent]
+        return {"total": st.donated_total, "count": st.donation_count, "recent": recent,
+                "slot_ready": self.slot_ready, "running": self.running, "session": self._session}
+
+    def _save_snapshot(self, d: Donation) -> str:
+        """Lưu ảnh chụp lượt đóng góp (vẽ khung tờ + số tiền); trả tên file, '' nếu lỗi."""
+        if d.snapshot is None:
+            return ""
+        try:
+            img = d.snapshot.copy()
+            cv2.polylines(img, [np.round(d.corners).astype(np.int32)], True, (0, 255, 0), 3, cv2.LINE_AA)
+            slot = self.aggregator.slot
+            if config.SNAPSHOT_CROP and slot is not None:
+                pts = np.vstack([d.corners, slot]).astype(np.int32)
+                x1, y1 = np.maximum(pts.min(axis=0) - config.SNAPSHOT_PAD_PX, 0)
+                x2, y2 = pts.max(axis=0) + config.SNAPSHOT_PAD_PX
+                img = img[y1:y2, x1:x2]
+            cv2.putText(img, f"#{d.seq} {d.value} VND  total {d.total_after}", (8, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, config.SNAPSHOT_QUALITY])
+            if not ok:
+                return ""
+            config.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            name = f"{self._session}_{d.seq:05d}_{d.value}.jpg"
+            buf.tofile(str(config.SNAPSHOT_DIR / name))       # ghi được cả đường dẫn có dấu
+            return name
+        except Exception as exc:  # noqa: BLE001
+            self.audit_error = f"ảnh chụp: {type(exc).__name__}: {exc}"
+            return ""
+
+    def _log_donation(self, d: Donation) -> Donation:
+        """Mỗi lượt: một ảnh chụp + một dòng JSON Lines (chỉ ghi thêm). Trả bản nhẹ, không giữ ảnh."""
+        self.audit_error = None
+        name = self._save_snapshot(d)
+        rec = dict(session=self._session, seq=d.seq,
+                   time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(d.t)),
+                   label=d.label, value=d.value, confidence=round(d.confidence, 3), manual=d.manual,
+                   total_after=d.total_after, review=d.review, snapshot=name)
+        try:
+            config.AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(config.AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            self.audit_error = f"nhật ký: {type(exc).__name__}: {exc}"
+        return replace(d, snapshot=None, snapshot_file=name)
+    
     # ------------------------------------------------------------------ nội bộ
     def _require_ready(self) -> None:
         if not self.ready:
@@ -214,8 +293,13 @@ class Engine:
                 frame_id += 1
                 detections, timings = self.pipeline.process(frame)
                 with self._lock:
-                    state = self.aggregator.update(detections)
-                if state.just_stabilized:
+                    state = self.aggregator.update(detections, frame)          # đổi: truyền thêm frame
+                for d in state.new_donations:                                  # mới
+                    light = self._log_donation(d)
+                    with self._lock:
+                        self.recent.append(light)
+                    self.donations.put(light)
+                if state.just_stabilized and not config.KIOSK_MODE:            # đổi: kiosk không đọc to tổng "đang trong khung"
                     self.events.put(StableEvent(state.total, state.n_money))
                 self._out = Output(frame, state, timings, fps, frame_id)
         except Exception as exc:  # noqa: BLE001

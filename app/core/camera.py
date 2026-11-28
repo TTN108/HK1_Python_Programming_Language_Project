@@ -51,6 +51,7 @@ class Camera:
         self._times: deque[float] = deque(maxlen=30)
         self.ended = False
         self.error: str | None = None
+        self.reconnects = 0 
 
     # ------------------------------------------------------------------
     def _open(self) -> cv2.VideoCapture:
@@ -105,6 +106,8 @@ class Camera:
                 if self.is_file and self.loop_video:
                     self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     continue
+                if not self.is_file and self._reconnect():      # mới: webcam chập chờn -> nối lại, không dừng cả trạm
+                    continue                                    # mới                
                 self.ended = True
                 with self._cond:
                     self._cond.notify_all()
@@ -117,6 +120,21 @@ class Camera:
                 self._cond.notify_all()
             if self.is_file:  # phát video theo tốc độ gốc
                 time.sleep(max(0.0, delay - (time.perf_counter() - t0)))
+
+    def _reconnect(self) -> bool:                                # mới
+        for _ in range(config.CAMERA_RECONNECT_TRIES):
+            if self._stop.is_set():
+                return False
+            time.sleep(config.CAMERA_RECONNECT_WAIT)
+            try:
+                if self._cap is not None:
+                    self._cap.release()
+                self._cap = self._open()
+                self.reconnects += 1
+                return True
+            except RuntimeError as exc:
+                self.error = str(exc)
+        return False
 
     def read(self, timeout: float = 1.0) -> tuple[np.ndarray | None, int]:
         """Chờ khung mới hơn lần đọc trước. Trả về (None, id) nếu hết thời gian hoặc video đã hết."""

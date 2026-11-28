@@ -5,13 +5,13 @@ import customtkinter as ctk
 
 from app.core.aggregator import FrameState
 from app.ui import texts, theme
-
+from app import config
 
 class TotalCard(ctk.CTkFrame):
     def __init__(self, parent):
         super().__init__(parent, fg_color=theme.ACCENT, corner_radius=theme.RADIUS)
-        self._title = ctk.CTkLabel(self, text=texts.TOTAL_TITLE, font=theme.font(12, True),
-                                   text_color="#DDE6FF", anchor="w")
+        self._title = ctk.CTkLabel(self, text=texts.TOTAL_TITLE_KIOSK if config.KIOSK_MODE else texts.TOTAL_TITLE,  # đổi
+                                   font=theme.font(12, True), text_color="#DDE6FF", anchor="w")
         self._title.pack(anchor="w", padx=20, pady=(14, 0))
         self._total = ctk.CTkLabel(self, text="0 ₫", font=theme.font(40, True),
                                    text_color=theme.ON_ACCENT, anchor="w")
@@ -22,7 +22,10 @@ class TotalCard(ctk.CTkFrame):
                                   text_color="#DDE6FF", anchor="w", justify="left", wraplength=340)
         self._hint.pack(anchor="w", padx=20, pady=(2, 14))
 
-    def update_state(self, state: FrameState | None) -> None:
+    def update_state(self, state: FrameState | None, slot_ready: bool = True) -> None:   # đổi
+        if config.KIOSK_MODE:                                                             # mới
+            self._update_kiosk(state, slot_ready)
+            return
         if state is None or state.n_tracks == 0:
             self._set(0, "", texts.HINT_EMPTY, theme.ACCENT)
             return
@@ -42,7 +45,9 @@ class TotalCard(ctk.CTkFrame):
         self._set(state.total, "  ·  ".join(parts), hint, color)
 
     def _set(self, total: int, count: str, hint: str, color: str) -> None:
-        main, sub = ("#06261C", "#0B3D2E") if color == theme.GOOD else (theme.ON_ACCENT, "#DDE6FF")
+        main, sub = (("#06261C", "#0B3D2E") if color == theme.GOOD else
+                     ("#2B1D00", "#4A3300") if color == theme.WARN else
+                     (theme.ON_ACCENT, "#DDE6FF"))                       # đổi: thêm nhánh WARN
         self.configure(fg_color=color)
         self._title.configure(text_color=sub)
         self._total.configure(text_color=main)
@@ -51,3 +56,16 @@ class TotalCard(ctk.CTkFrame):
         self._total.configure(text=texts.fmt_vnd(total))
         self._count.configure(text=count)
         self._hint.configure(text=hint)
+
+    def _update_kiosk(self, state: FrameState | None, slot_ready: bool) -> None:          # mới
+        total = state.donated_total if state else 0
+        count = f"{state.donation_count} lượt đóng góp" if state else ""
+        if state and state.n_money:
+            count += f"  ·  {state.n_money} tờ chờ bỏ vào khe"
+        if not slot_ready:
+            hint, color = texts.HINT_NO_SLOT, theme.WARN
+        elif state and state.n_money:
+            hint, color = texts.HINT_AWAIT_SLOT, theme.GOOD
+        else:
+            hint, color = texts.HINT_KIOSK_EMPTY, theme.ACCENT
+        self._set(total, count, hint, color)
